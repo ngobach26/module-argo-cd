@@ -6,43 +6,48 @@ data "aws_eks_cluster" "msur" {
   name = var.kubernetes_cluster_id
 }
 
+# Kubernetes provider: dùng exec -> aws eks get-token (v1beta1)
 provider "kubernetes" {
-  cluster_ca_certificate = base64decode(data.aws_eks_cluster.msur.certificate_authority.0.data)
   host                   = data.aws_eks_cluster.msur.endpoint
+  cluster_ca_certificate = base64decode(data.aws_eks_cluster.msur.certificate_authority[0].data)
+
   exec {
-    api_version = "client.authentication.k8s.io/v1alpha1"
-    command     = "aws-iam-authenticator"
-    args        = ["token", "-i", "${data.aws_eks_cluster.msur.name}"]
+    api_version = "client.authentication.k8s.io/v1beta1"
+    command     = "aws"
+    args = [
+      "eks", "get-token",
+      "--cluster-name", data.aws_eks_cluster.msur.name,
+      "--region", var.aws_region
+    ]
   }
 }
 
-
-
+# Helm provider (v3): kubernetes là attribute object, exec = { ... }
 provider "helm" {
-  kubernetes {
-    cluster_ca_certificate = base64decode(data.aws_eks_cluster.msur.certificate_authority.0.data)
+  kubernetes = {
     host                   = data.aws_eks_cluster.msur.endpoint
-    exec {
-      api_version = "client.authentication.k8s.io/v1alpha1"
-      command     = "aws-iam-authenticator"
-      args        = ["token", "-i", "${data.aws_eks_cluster.msur.name}"]
+    cluster_ca_certificate = base64decode(data.aws_eks_cluster.msur.certificate_authority[0].data)
+
+    exec = {
+      api_version = "client.authentication.k8s.io/v1beta1"
+      command     = "aws"
+      args = [
+        "eks", "get-token",
+        "--cluster-name", data.aws_eks_cluster.msur.name,
+        "--region", var.aws_region
+      ]
     }
   }
 }
 
 resource "kubernetes_namespace" "argo-ns" {
-  metadata {
-    name = "argocd"
-  }
+  metadata { name = "argocd" }
 }
 
 resource "helm_release" "argocd" {
   name       = "msur"
   chart      = "argo-cd"
   repository = "https://argoproj.github.io/argo-helm"
-  namespace  = "argocd"
-
-  # We are going to access the console with a port forwarded connection, so we'll disable TLS.
-  # This allow us to avoid the self-signed certificate warning for localhosts.
-  # controller.extraArgs = ["insecure"]
+  namespace  = kubernetes_namespace.argo-ns.metadata[0].name
+  depends_on = [kubernetes_namespace.argo-ns]
 }
